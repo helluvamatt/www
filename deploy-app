@@ -1,0 +1,130 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+
+use Getopt::Long;
+use Cwd qw(chdir getcwd abs_path);
+
+# must be root
+fatal('script must be run as root') if $> != 0;
+
+# configs
+my $http_user = 'http';
+my $http_alias_dir = '/etc/httpd/conf/extra/apps';
+
+# arguments
+my $verbose = 0;
+my $directory = '';
+my $cloneUrl = '';
+my $alias = '';
+
+# parse command line
+GetOptions('directory:s' => \$directory, 'verbose' => \$verbose, 'alias:s' => \$alias);
+($cloneUrl) = @ARGV;
+
+fatal("missing clone url", 1) unless defined $cloneUrl and $cloneUrl ne '';
+
+# fix the directory
+if ($directory eq '')
+{
+	if ($cloneUrl =~ /\/([-\w._]+?)(?:\.git)?$/)
+	{
+		$directory = $1;
+	}
+	else
+	{
+		fatal('failed to parse cloneUrl for directory: cloneUrl is \'' . $cloneUrl . '\'');
+	}
+}
+
+# clone repo
+my $git_cmd = 'git clone --recursive ' . $cloneUrl . ' ' . $directory;
+system($git_cmd) == 0 or fatal("git clone failed");
+
+# run composer inside the directory
+if ( -f "$directory/composer.json" )
+{
+	my $composer_cmd = 'composer install';
+	my $orig_dir = getcwd();
+	chdir($directory);
+	system($composer_cmd) == 0 or fatal('composer failed');
+	chdir($orig_dir);
+}
+
+# chown directory to $http_user
+my $chown_cmd = "chown -Rv $http_user $directory";
+system($chown_cmd) == 0 or fatal('chown failed');
+
+# build alias file
+if (defined $alias and $alias ne '')
+{
+	# find what directory should be served from the web server: start in project root
+	my $abs_path = abs_path($directory);
+	
+	# common subdirs of project root
+	if ( -d "$abs_path/public" )
+	{
+		$abs_path .= "/public";
+	}
+	elsif ( -d "$abs_path/www" )
+	{
+		$abs_path .= "/www";
+	}
+	
+	# name the alias
+	if ( $alias !~ /^\// )
+	{
+		$alias = '/' . $alias;
+	}
+	my $name = substr($alias, 1);
+	if ($name eq '') { $name = 'default'; }
+	
+	info("Generating Apache HTTPD alias definition: $alias => $abs_path");
+	my $alias_file = $http_alias_dir . '/' . $name . '.conf';
+	open(ALIAS_FILE, '>', $alias_file) or fatal("Failed to open \`$alias_file\`: $!");
+	
+	print ALIAS_FILE <<EOF;
+Alias "$alias" "$abs_path
+<Directory "$abs_path">
+	Require all granted
+	
+	RewriteEngine On
+	RewriteBase $alias
+	RewriteCond %{REQUEST_FILENAME} !-f
+	RewriteRule ^ index.php [QSA,L]
+</Directory>
+EOF
+
+	close(ALIAS_FILE);
+}
+
+sub fatal
+{
+	my $message = shift;
+	my $usage = shift;
+	print_usage() if ($usage);
+	print 'fatal: ' . $message . "\n";
+	exit 1;
+}
+
+sub info
+{
+	my $message = shift;
+	print 'info: ' . $message . "\n";
+}
+
+sub verbose
+{
+	if ($verbose)
+	{
+		my $message = shift;
+		print 'verbose: ' . $message . "\n";
+	}
+}
+
+sub print_usage
+{
+	print "usage: $0 [--verbose] [--directory <dir>] <cloneUrl>\n";
+	
+}
