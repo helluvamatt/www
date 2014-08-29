@@ -10,7 +10,7 @@ Steps to deploy a new application:
 
 Steps to update an existing application:
 
-** Danger **: This section is subject to change
+**Danger**: This section is subject to change
 
 1. `cd app`
 2. `git pull`
